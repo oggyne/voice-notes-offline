@@ -1,216 +1,276 @@
-const { useState, useEffect } = React;
-const { createRoot } = ReactDOM;
+const App = () => {
+  const [notes, setNotes] = React.useState([]);
+  const [showForm, setShowForm] = React.useState(false);
+  const [voskInstance, setVoskInstance] = React.useState(null);
+  const [isLoading, setIsLoading] = React.useState(true);
 
-// Utility: Truncate text to ~150 chars without cutting words
-const truncateText = (text, maxLength = 150) => {
-  if (text.length <= maxLength) return text;
-  const slice = text.slice(0, maxLength);
-  const lastSpace = slice.lastIndexOf(' ');
-  return slice.slice(0, lastSpace) + '...';
-};
+  // Ініціалізація IndexedDB
+  const initDB = () => {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('VoiceNotesDB', 1);
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        db.createObjectStore('notes', { keyPath: 'id' });
+      };
+      request.onsuccess = (event) => resolve(event.target.result);
+      request.onerror = () => reject(request.error);
+    });
+  };
 
-// Utility: Format ISO date to readable string
-const formatDate = (isoString) => {
-  const date = new Date(isoString);
-  return date.toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-};
+  // Завантаження нотаток з IndexedDB
+  const getNotes = async () => {
+    try {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('notes', 'readonly');
+        const store = tx.objectStore('notes');
+        const request = store.getAll();
+        request.onsuccess = () => {
+          console.log('Loaded notes from IndexedDB:', request.result);
+          resolve(request.result);
+        };
+        request.onerror = () => reject(request.error);
+      });
+    } catch (err) {
+      console.error('Failed to load notes:', err);
+      return [];
+    }
+  };
 
-// IndexedDB utilities
-const getNotes = async () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('VoiceNotesDB', 1);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      db.createObjectStore('notes', { keyPath: 'id' });
-    };
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      const tx = db.transaction('notes', 'readonly');
-      const store = tx.objectStore('notes');
-      const allNotes = store.getAll();
-      allNotes.onsuccess = () => resolve(allNotes.result);
-      allNotes.onerror = () => reject(allNotes.error);
-    };
-    request.onerror = () => reject(request.error);
-  });
-};
+  // Збереження нотатки в IndexedDB
+  const saveNote = async (note) => {
+    try {
+      const db = await initDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('notes', 'readwrite');
+        const store = tx.objectStore('notes');
+        store.put(note);
+        tx.oncomplete = () => {
+          console.log('Saved note to IndexedDB:', note);
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (err) {
+      console.error('Failed to save note:', err);
+    }
+  };
 
-const saveNote = async (note) => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('VoiceNotesDB', 1);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      db.createObjectStore('notes', { keyPath: 'id' });
-    };
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      const tx = db.transaction('notes', 'readwrite');
-      const store = tx.objectStore('notes');
-      store.put(note);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    };
-    request.onerror = () => reject(request.error);
-  });
-};
+  // Завантаження нотаток при монтуванні
+  React.useEffect(() => {
+    const loadData = async () => {
+      try {
+        // Ініціалізація Vosk
+        if (typeof Vosk === 'undefined') {
+          throw new Error('Vosk library not loaded');
+        }
+        const model = await Vosk.createModel('/models/vosk-model-small-uk-v3-small.zip');
+        setVoskInstance(model);
 
-const deleteNote = async (id) => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('VoiceNotesDB', 1);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      db.createObjectStore('notes', { keyPath: 'id' });
+        // Завантаження нотаток
+        const savedNotes = await getNotes();
+        setNotes(savedNotes);
+      } catch (err) {
+        console.error('Initialization error:', err);
+        alert('Speech recognition or data loading failed');
+      } finally {
+        setIsLoading(false);
+      }
     };
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      const tx = db.transaction('notes', 'readwrite');
-      const store = tx.objectStore('notes');
-      store.delete(id);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    };
-    request.onerror = () => reject(request.error);
-  });
-};
+    loadData();
+  }, []);
 
-const deleteAllNotes = async () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('VoiceNotesDB', 1);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      db.createObjectStore('notes', { keyPath: 'id' });
+  const handleNoteSubmit = async (transcript) => {
+    const newNote = {
+      id: Date.now(),
+      content: transcript,
+      timestamp: new Date().toLocaleString(),
     };
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      const tx = db.transaction('notes', 'readwrite');
-      const store = tx.objectStore('notes');
-      store.clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    };
-    request.onerror = () => reject(request.error);
-  });
-};
+    setNotes((prevNotes) => [...prevNotes, newNote]);
+    await saveNote(newNote); // Збереження в IndexedDB
+    setShowForm(false);
+  };
 
-// NoteList component
-const NoteList = ({ notes, onView, onDelete }) => {
+  const handleNewNote = () => {
+    setShowForm(true);
+  };
+
+  const handleCancel = () => {
+    setShowForm(false);
+  };
+
   return (
-    <div className="space-y-2">
-      {notes.length ? notes.map(note => (
-        <div key={note.id} className="p-4 bg-gray-100 rounded-lg flex justify-between items-start">
-          <div onClick={() => onView(note)} className="cursor-pointer">
-            <p className="text-gray-800">{truncateText(note.text)}</p>
-            <p className="text-sm text-gray-500">{formatDate(note.createdAt)}</p>
-          </div>
-          <button
-            onClick={() => onDelete(note.id)}
-            className="text-red-500 hover:text-red-700"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+    <div className="container mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-4">Voice Notes</h1>
+      {isLoading ? (
+        <div className="flex justify-center items-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-blue-500"></div>
         </div>
-      )) : <p className="text-gray-500">No notes yet.</p>}
+      ) : showForm ? (
+        <NoteForm
+          onSubmit={handleNoteSubmit}
+          onCancel={handleCancel}
+          voskInstance={voskInstance}
+          isLoading={isLoading}
+        />
+      ) : (
+        <>
+          <button
+            className="px-4 py-2 bg-blue-500 text-white rounded mb-4"
+            onClick={handleNewNote}
+          >
+            New Note
+          </button>
+          <NoteList notes={notes} />
+        </>
+      )}
     </div>
   );
 };
 
-// NoteForm component
-const NoteForm = ({ onSubmit, onCancel }) => {
-  const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [recognizer, setRecognizer] = useState(null);
-  const [error, setError] = useState(null);
+const NoteForm = ({ onSubmit, onCancel, voskInstance, isLoading }) => {
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [transcript, setTranscript] = React.useState('');
+  const [partialTranscript, setPartialTranscript] = React.useState('');
+  const [allPartials, setAllPartials] = React.useState([]); // Зберігаємо всі partialresult
+  const [recognizer, setRecognizer] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [isProcessing, setIsProcessing] = React.useState(false);
 
-  useEffect(() => {
-    const initVosk = async () => {
+  React.useEffect(() => {
+    if (!voskInstance) return;
+
+    const initRecognizer = async () => {
       try {
-        const model = await Vosk.createModel('/models/vosk-model-small-uk-v3-small.zip');
-        const rec = new Vosk.Recognizer({ model, sampleRate: 16000 });
+        const rec = new voskInstance.KaldiRecognizer(16000);
+        rec.on('result', (message) => {
+          if (message.result && message.result.text) {
+            console.log('Result:', message.result.text);
+            setTranscript((prev) => (prev ? prev + ' ' : '') + message.result.text);
+          }
+        });
+        rec.on('partialresult', (message) => {
+          if (message.result && message.result.partial) {
+            console.log('Partial:', message.result.partial);
+            setPartialTranscript(message.result.partial);
+            setAllPartials((prev) => [...prev, message.result.partial]); // Додаємо до allPartials
+          } else {
+            setPartialTranscript('');
+          }
+        });
         setRecognizer(rec);
-        startRecording(rec);
       } catch (err) {
-        console.error('Failed to initialize Vosk:', err);
-        setError('Failed to load speech recognition model.');
-        alert('Speech recognition unavailable.');
+        console.error('Failed to initialize recognizer:', err);
+        setError('Failed to load speech recognition model');
+        alert('Speech recognition unavailable');
       }
     };
 
-    initVosk();
+    initRecognizer();
 
     return () => {
       if (recognizer) {
         recognizer.terminate();
       }
     };
-  }, []);
+  }, [voskInstance]);
 
   const startRecording = async (rec) => {
-    if (!rec) return;
+    if (!rec) {
+      console.warn('No recognizer available');
+      return;
+    }
+
+    let isRecordingLocal = false;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 1,
+          sampleRate: 16000,
+        },
+      });
+      const audioTracks = stream.getAudioTracks();
       const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       const source = audioContext.createMediaStreamSource(stream);
+      // TODO: Замінити ScriptProcessorNode на AudioWorkletNode для майбутньої сумісності
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-      setIsRecording(true);
-      setTranscript('');
-
       processor.onaudioprocess = (event) => {
-        if (!isRecording) return;
-        const input = event.inputBuffer.getChannelData(0);
-        const buffer = new Int16Array(input.length);
-        for (let i = 0; i < input.length; i++) {
-          buffer[i] = Math.min(1, Math.max(-1, input[i])) * 0x7FFF;
-        }
-        if (rec.acceptWaveform(buffer)) {
-          const result = rec.result();
-          if (result.text) {
-            setTranscript(prev => (prev ? prev + ' ' : '') + result.text);
+        if (!isRecordingLocal) return;
+        try {
+          if (!event.inputBuffer) {
+            console.warn('No inputBuffer in event');
+            return;
           }
+          const inputBuffer = event.inputBuffer;
+          rec.acceptWaveform(inputBuffer);
+        } catch (err) {
+          console.error('Error processing audio:', err);
         }
       };
 
       source.connect(processor);
       processor.connect(audioContext.destination);
 
-      // Cleanup function
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+
+      isRecordingLocal = true;
+      setIsRecording(true);
+      setTranscript('');
+      setPartialTranscript('');
+      setAllPartials([]);
+      console.log('Recording started');
+
       const cleanup = () => {
-        processor.disconnect();
-        source.disconnect();
-        audioContext.close();
-        stream.getTracks().forEach(track => track.stop());
+        try {
+          processor.disconnect();
+          source.disconnect();
+          audioContext.close();
+          stream.getTracks().forEach((track) => track.stop());
+          console.log('Recording cleanup completed');
+        } catch (err) {
+          console.error('Cleanup error:', err);
+        }
       };
 
-      setRecognizer(prev => ({ ...prev, cleanup }));
+      setRecognizer((prev) => ({ ...prev, cleanup }));
     } catch (err) {
       console.error('Recording error:', err);
-      setError('Failed to access microphone.');
-      alert('Microphone access denied.');
+      setError('Failed to access microphone');
+      alert('Microphone access denied');
       setIsRecording(false);
     }
   };
 
   const stopRecording = () => {
+    console.log('stopRecording called');
     if (recognizer && isRecording) {
       setIsRecording(false);
-      if (recognizer.cleanup) {
-        recognizer.cleanup();
-      }
-      const finalResult = recognizer.result();
-      const finalText = finalResult.text || transcript;
-      if (finalText.trim()) {
-        onSubmit(finalText);
-      }
-      setTranscript('');
+      setIsProcessing(true); // Показати індикатор обробки
+      setTimeout(() => {
+        // Об’єднуємо transcript і останній allPartials
+        const lastPartial = allPartials.length > 0 ? allPartials[allPartials.length - 1] : '';
+        const finalTranscript = transcript.trim()
+          ? transcript.trim() + (lastPartial.trim() ? ' ' + lastPartial.trim() : '')
+          : lastPartial.trim();
+        if (finalTranscript) {
+          console.log('Submitting transcript:', finalTranscript);
+          onSubmit(finalTranscript);
+        }
+        if (recognizer.cleanup) {
+          recognizer.cleanup();
+        }
+        setTranscript('');
+        setPartialTranscript('');
+        setAllPartials([]);
+        setIsProcessing(false); // Прибрати індикатор обробки
+        console.log('Recording stopped');
+      }, 3500); // Збільшено затримку до 3500 мс
     }
   };
 
@@ -229,50 +289,16 @@ const NoteForm = ({ onSubmit, onCancel }) => {
   }
 
   return (
-    <div className="flex space-x-2">
-      <button
-        className={`px-4 py-2 rounded text-white ${isRecording ? 'bg-red-500' : 'bg-blue-500'}`}
-        onClick={stopRecording}
-        disabled={!isRecording}
-      >
-        {isRecording ? 'Stop Recording' : 'Recording...'}
-      </button>
-      <button
-        className="px-4 py-2 bg-gray-500 text-white rounded"
-        onClick={onCancel}
-      >
-        Cancel
-      </button>
-    </div>
-  );
-};
-
-// NoteView component
-const NoteView = ({ note, onSave, onCancel }) => {
-  const [text, setText] = useState(note.text);
-
-  const handleSave = () => {
-    const updatedNote = {
-      ...note,
-      text
-    };
-    onSave(updatedNote);
-  };
-
-  return (
     <div className="space-y-4">
-      <textarea
-        className="w-full p-2 border rounded"
-        rows="5"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
       <div className="flex space-x-2">
         <button
-          className="px-4 py-2 bg-blue-500 text-white rounded"
-          onClick={handleSave}
+          className={`px-4 py-2 rounded text-white ${
+            isRecording ? 'bg-red-500' : isLoading || !recognizer ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-500'
+          }`}
+          onClick={isRecording ? stopRecording : () => startRecording(recognizer)}
+          disabled={isLoading || !recognizer}
         >
-          Save
+          {isRecording ? 'Stop Recording' : 'Start Recording'}
         </button>
         <button
           className="px-4 py-2 bg-gray-500 text-white rounded"
@@ -281,165 +307,33 @@ const NoteView = ({ note, onSave, onCancel }) => {
           Cancel
         </button>
       </div>
-    </div>
-  );
-};
-
-// DeleteAllDialog component
-const DeleteAllDialog = ({ open, onClose, onConfirm }) => {
-  return (
-    <div className={`fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center ${open ? '' : 'hidden'}`}>
-      <div className="bg-white p-6 rounded-lg max-w-sm w-full">
-        <h3 className="text-lg font-bold mb-4">Delete All Notes?</h3>
-        <p className="text-gray-600 mb-6">This will permanently delete all notes. Are you sure?</p>
-        <div className="flex space-x-2">
-          <button
-            className="px-4 py-2 bg-gray-500 text-white rounded"
-            onClick={onClose}
-          >
-            Cancel
-          </button>
-          <button
-            className="px-4 py-2 bg-red-500 text-white rounded"
-            onClick={onConfirm}
-          >
-            Delete
-          </button>
+      {(transcript || partialTranscript) && (
+        <div className="p-2 bg-gray-100 rounded">
+          <p className="text-gray-800">{partialTranscript || transcript}</p>
         </div>
-      </div>
-    </div>
-  );
-};
-
-// Main App component
-const App = () => {
-  const [notes, setNotes] = useState([]);
-  const [currentScreen, setCurrentScreen] = useState('list');
-  const [selectedNote, setSelectedNote] = useState(null);
-  const [searchText, setSearchText] = useState('');
-  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
-
-  useEffect(() => {
-    const loadNotes = async () => {
-      try {
-        const storedNotes = await getNotes();
-        setNotes(storedNotes);
-      } catch (error) {
-        console.error('Error loading notes:', error);
-      }
-    };
-    loadNotes();
-  }, []);
-
-  const handleNewNote = async (transcript) => {
-    if (!transcript) return;
-    const note = {
-      id: crypto.randomUUID(),
-      text: transcript,
-      createdAt: new Date().toISOString()
-    };
-    try {
-      await saveNote(note);
-      setNotes([...notes, note]);
-      setCurrentScreen('list');
-    } catch (error) {
-      console.error('Error saving note:', error);
-      alert('Failed to save note.');
-    }
-  };
-
-  const handleDelete = async (id) => {
-    try {
-      await deleteNote(id);
-      setNotes(notes.filter(note => note.id !== id));
-    } catch (error) {
-      console.error('Error deleting note:', error);
-    }
-  };
-
-  const handleDeleteAll = async () => {
-    try {
-      await deleteAllNotes();
-      setNotes([]);
-      setDeleteAllOpen(false);
-    } catch (error) {
-      console.error('Error deleting all notes:', error);
-      alert('Failed to delete all notes.');
-    }
-  };
-
-  const handleView = (note) => {
-    setSelectedNote(note);
-    setCurrentScreen('view');
-  };
-
-  const handleSaveNote = async (updatedNote) => {
-    try {
-      await saveNote(updatedNote);
-      setNotes(notes.map(note => note.id === updatedNote.id ? updatedNote : note));
-      setCurrentScreen('list');
-      setSelectedNote(null);
-    } catch (error) {
-      console.error('Error saving note:', error);
-      alert('Failed to save note.');
-    }
-  };
-
-  // Filter notes by search
-  const filteredNotes = notes.filter(note => 
-    !searchText || note.text.toLowerCase().includes(searchText.toLowerCase())
-  );
-
-  return (
-    <div className="max-w-md mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Voice Notes</h1>
-      {currentScreen === 'list' ? (
-        <>
-          <div className="mb-4">
-            <input
-              className="w-full p-2 border rounded"
-              placeholder="Search notes..."
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-            />
-          </div>
-          <NoteList notes={filteredNotes} onView={handleView} onDelete={handleDelete} />
-          <div className="mt-4 flex space-x-2">
-            <button
-              className="px-4 py-2 bg-blue-500 text-white rounded"
-              onClick={() => setCurrentScreen('form')}
-            >
-              New Note
-            </button>
-            <button
-              className={`px-4 py-2 rounded ${notes.length ? 'bg-red-500 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
-              onClick={() => setDeleteAllOpen(true)}
-              disabled={!notes.length}
-            >
-              Delete All Notes
-            </button>
-          </div>
-          <DeleteAllDialog
-            open={deleteAllOpen}
-            onClose={() => setDeleteAllOpen(false)}
-            onConfirm={handleDeleteAll}
-          />
-        </>
-      ) : currentScreen === 'form' ? (
-        <NoteForm
-          onSubmit={handleNewNote}
-          onCancel={() => setCurrentScreen('list')}
-        />
-      ) : (
-        <NoteView
-          note={selectedNote}
-          onSave={handleSaveNote}
-          onCancel={() => setCurrentScreen('list')}
-        />
+      )}
+      {isProcessing && (
+        <div className="text-blue-500 text-sm font-semibold animate-pulse">Обробка...</div>
       )}
     </div>
   );
 };
 
-const root = createRoot(document.getElementById('root'));
-root.render(<App />);
+const NoteList = ({ notes }) => (
+  <div>
+    {notes.length === 0 ? (
+      <p>No notes yet.</p>
+    ) : (
+      <ul className="space-y-2">
+        {notes.map((note) => (
+          <li key={note.id} className="p-2 bg-gray-100 rounded">
+            <p>{note.content}</p>
+            <p className="text-sm text-gray-500">{note.timestamp}</p>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+);
+
+ReactDOM.render(<App />, document.getElementById('root'));

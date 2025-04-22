@@ -10,13 +10,20 @@ const urlsToCache = [
   'https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js',
   'https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js',
   'https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/babel.min.js',
-  'https://cdn.jsdelivr.net/npm/vosk@0.3.43/dist/vosk.js'
+  'https://cdn.jsdelivr.net/npm/vosk-browser@0.0.5/dist/vosk.js'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(urlsToCache);
+      return Promise.all(
+        urlsToCache.map((url) =>
+          cache.add(url).catch((err) => {
+            console.warn(`Failed to cache ${url}: ${err}`);
+            return null;
+          })
+        )
+      );
     })
   );
   self.skipWaiting();
